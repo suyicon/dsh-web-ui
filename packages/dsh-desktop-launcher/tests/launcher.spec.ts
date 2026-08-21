@@ -4,8 +4,10 @@ import {
   renderDesktopEntry,
   renderLauncherScript,
   renderShortcutInstaller,
+  renderVbsWrapper,
   resolveLauncherSpec,
   scriptFileName,
+  vbsFileName,
 } from '../src/core/launcher.ts'
 
 describe('launcher spec resolution', () => {
@@ -76,26 +78,41 @@ describe('desktop file rendering', () => {
     expect(withIcon).not.toContain('Icon=utilities-terminal')
   })
 
-  it('renders a Windows shortcut installer with the icon location', () => {
+  it('renders a Windows shortcut installer targeting wscript.exe + launcher.vbs', () => {
     const ps = renderShortcutInstaller({
-      launcherPath: 'C:/Users/u/.dsh/desktop-launcher/launcher.ps1',
+      vbsPath: 'C:/Users/u/.dsh/desktop-launcher/launcher.vbs',
       desktopPath: 'C:/Users/u/Desktop/DSH.lnk',
       homeDir: 'C:/Users/u',
       iconLocation: 'C:/Users/u/.dsh/desktop-launcher/dsh.ico',
     })
-    expect(ps).toContain("$shortcut.TargetPath = 'powershell.exe'")
-    expect(ps).toContain('-WindowStyle Hidden -File C:/Users/u/.dsh/desktop-launcher/launcher.ps1')
+    // .lnk targets wscript.exe + launcher.vbs, not powershell.exe with suspicious flags
+    expect(ps).toContain("$shortcut.TargetPath = 'wscript.exe'")
+    expect(ps).toContain("$shortcut.Arguments = 'C:/Users/u/.dsh/desktop-launcher/launcher.vbs'")
+    expect(ps).not.toContain('-ExecutionPolicy Bypass')
+    expect(ps).not.toContain('-WindowStyle Hidden')
     expect(ps).toContain("$shortcut.IconLocation = 'C:/Users/u/.dsh/desktop-launcher/dsh.ico'")
     expect(ps).toContain("$shortcut.Save()")
   })
 
-  it('falls back to the shell icon when no icon is given', () => {
+  it('falls back to wscript.exe icon when no icon is given', () => {
     const ps = renderShortcutInstaller({
-      launcherPath: 'C:/launcher.ps1',
+      vbsPath: 'C:/launcher.vbs',
       desktopPath: 'C:/Desktop/DSH.lnk',
       homeDir: 'C:/',
-      iconLocation: 'powershell.exe,0',
+      iconLocation: 'wscript.exe,0',
     })
-    expect(ps).toContain("$shortcut.IconLocation = 'powershell.exe,0'")
+    expect(ps).toContain("$shortcut.IconLocation = 'wscript.exe,0'")
+  })
+
+  it('returns the VBS wrapper file name', () => {
+    expect(vbsFileName()).toBe('launcher.vbs')
+  })
+
+  it('renders a VBS wrapper that invokes powershell.exe with the ps1 path', () => {
+    const vbs = renderVbsWrapper('C:/Users/u/.dsh/desktop-launcher/launcher.ps1')
+    expect(vbs).toContain('WScript.Shell')
+    expect(vbs).toContain('powershell.exe')
+    expect(vbs).toContain('-ExecutionPolicy Bypass')
+    expect(vbs).toContain('launcher.ps1')
   })
 })

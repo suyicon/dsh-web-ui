@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createDesktopShortcut, makeRoutes, type CommandRunner } from '../src/routes.ts'
 import { LAUNCHER_API } from '../src/protocol.ts'
+import { renderVbsWrapper, vbsFileName } from '../src/core/launcher.ts'
 
 /** One recorded invocation of the fake runner. */
 interface Call {
@@ -34,7 +35,7 @@ function recordingRunner(calls: Call[], failWith?: { file: string; code: number;
 const spec = () => ({ dshCommand: 'dsh', url: 'http://127.0.0.1:3080' })
 
 describe('createDesktopShortcut', () => {
-  it('writes the PowerShell launcher and runs the .lnk installer on win32', async () => {
+  it('writes the PowerShell launcher, VBS wrapper, and runs the .lnk installer on win32', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-desktop-launcher-win-'))
     try {
       const calls: Call[] = []
@@ -43,16 +44,29 @@ describe('createDesktopShortcut', () => {
       const result = await createDesktopShortcut({ resolveSpec: spec, homeDir: dir, platform: 'win32', run: recordingRunner(calls), iconSource: iconFile })
       expect(result.ok).toBe(true)
       expect(result.path).toBe(join(dir, 'Desktop', 'DeepSeek-Harness.lnk'))
-      expect(existsSync(join(dir, '.dsh', 'desktop-launcher', 'launcher.ps1'))).toBe(true)
-      expect(existsSync(join(dir, '.dsh', 'desktop-launcher', 'install-shortcut.ps1'))).toBe(true)
+      const scriptDir = join(dir, '.dsh', 'desktop-launcher')
+      expect(existsSync(join(scriptDir, 'launcher.ps1'))).toBe(true)
+      expect(existsSync(join(scriptDir, 'install-shortcut.ps1'))).toBe(true)
+      // VBS wrapper shields the .lnk from Windows Defender heuristic
+      expect(existsSync(join(scriptDir, vbsFileName()))).toBe(true)
       // the bundled dsh icon is copied next to the launcher and wired into the .lnk
-      expect(existsSync(join(dir, '.dsh', 'desktop-launcher', 'dsh.ico'))).toBe(true)
+      expect(existsSync(join(scriptDir, 'dsh.ico'))).toBe(true)
       expect(calls[0]?.file).toBe('where')
       const installer = calls.find(call => call.file === 'powershell')
       expect(installer?.args).toContain('-File')
-      const installerScript = existsSync(join(dir, '.dsh', 'desktop-launcher', 'install-shortcut.ps1'))
-        ? readFileSync(join(dir, '.dsh', 'desktop-launcher', 'install-shortcut.ps1'), 'utf8') : ''
-      expect(installerScript).toContain("$shortcut.IconLocation = '" + join(dir, '.dsh', 'desktop-launcher', 'dsh.ico') + "'")
+      const installerScript = existsSync(join(scriptDir, 'install-shortcut.ps1'))
+        ? readFileSync(join(scriptDir, 'install-shortcut.ps1'), 'utf8') : ''
+      // .lnk target is wscript.exe + launcher.vbs, not powershell.exe with suspicious flags
+      expect(installerScript).toContain("$shortcut.TargetPath = 'wscript.exe'")
+      expect(installerScript).toContain("$shortcut.Arguments = '" + join(scriptDir, vbsFileName()) + "'")
+      expect(installerScript).not.toContain('-ExecutionPolicy Bypass')
+      expect(installerScript).not.toContain('-WindowStyle Hidden')
+      expect(installerScript).toContain("$shortcut.IconLocation = '" + join(scriptDir, 'dsh.ico') + "'")
+      // VBS wrapper content: invokes powershell.exe with the ps1 path
+      const vbsContent = readFileSync(join(scriptDir, vbsFileName()), 'utf8')
+      expect(vbsContent).toContain('WScript.Shell')
+      expect(vbsContent).toContain('powershell.exe')
+      expect(vbsContent).toContain(join(scriptDir, 'launcher.ps1'))
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
