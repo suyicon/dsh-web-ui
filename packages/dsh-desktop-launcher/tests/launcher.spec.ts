@@ -42,6 +42,10 @@ describe('launcher script rendering', () => {
     expect(script).toContain('DeepSeek Harness')
     expect(script).toContain('正在启动')
     expect(script).toContain('XamlReader')
+    // launcher.ps1 hides its own console via Win32 API so the bat wrapper
+    // does not need the suspicious -WindowStyle Hidden flag.
+    expect(script).toContain('GetConsoleWindow')
+    expect(script).toContain('ShowWindow')
   })
 
   it('omits the profile flag when no profile is set', () => {
@@ -112,7 +116,9 @@ describe('desktop file rendering', () => {
     const bat = renderBatWrapper('C:/Users/u/.dsh/desktop-launcher/launcher.ps1')
     expect(bat).toContain('powershell')
     expect(bat).toContain('-ExecutionPolicy Bypass')
-    expect(bat).toContain('-WindowStyle Hidden')
     expect(bat).toContain('launcher.ps1')
+    // -WindowStyle Hidden is intentionally absent: launcher.ps1 hides its own
+    // console via the Win32 API, keeping the suspicious flag out of the bat.
+    expect(bat).not.toContain('-WindowStyle Hidden')
   })
 })

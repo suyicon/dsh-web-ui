@@ -67,6 +67,9 @@ describe('createDesktopShortcut', () => {
       expect(batContent).toContain('powershell')
       expect(batContent).toContain('-ExecutionPolicy Bypass')
       expect(batContent).toContain(join(scriptDir, 'launcher.ps1'))
+      // -WindowStyle Hidden is intentionally absent from the bat (launcher.ps1
+      // hides its own console via the Win32 API).
+      expect(batContent).not.toContain('-WindowStyle Hidden')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
