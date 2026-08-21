@@ -66,6 +66,11 @@ describe('createDesktopShortcut', () => {
       const vbsContent = readFileSync(join(scriptDir, vbsFileName()), 'utf8')
       expect(vbsContent).toContain('WScript.Shell')
       expect(vbsContent).toContain('powershell.exe')
+      // Uses RemoteSigned (not Bypass) and omits -WindowStyle Hidden
+      // (shell.Run 0 hides the window) — no suspicious flags in the VBS.
+      expect(vbsContent).toContain('-ExecutionPolicy RemoteSigned')
+      expect(vbsContent).not.toContain('-ExecutionPolicy Bypass')
+      expect(vbsContent).not.toContain('-WindowStyle Hidden')
       expect(vbsContent).toContain(join(scriptDir, 'launcher.ps1'))
       // Precise assertion: the VBS string must use doubled quotes ("""")
       // around the path so that shell.Run receives a properly quoted -File

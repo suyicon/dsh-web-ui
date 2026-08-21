@@ -69,10 +69,13 @@ export function vbsFileName(): string {
  * @returns the VBS script body.
  */
 export function renderVbsWrapper(ps1Path: string): string {
-  // Build the full command line that shell.Run passes to the shell. The path
-  // is wrapped in double quotes (supports paths with embedded spaces like
-  // C:\Users\John Doe\.dsh\...).
-  const cmdLine = `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${ps1Path}"`
+  // Build the command line that shell.Run passes to the shell. The path is
+  // wrapped in double quotes for paths with embedded spaces. We deliberately
+  // omit -ExecutionPolicy Bypass and -WindowStyle Hidden here — those flags
+  // triggered the Windows Defender LNK heuristic in the .lnk target, and
+  // shell.Run's second argument (0) already hides the window. RemoteSigned
+  // allows unsigned local scripts while being less suspicious than Bypass.
+  const cmdLine = `powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "${ps1Path}"`
   // In VBS, every double quote inside a string literal must be doubled.
   const vbsArg = cmdLine.replaceAll('"', '""')
   return [

@@ -112,7 +112,12 @@ describe('desktop file rendering', () => {
     const vbs = renderVbsWrapper('C:/Users/u/.dsh/desktop-launcher/launcher.ps1')
     expect(vbs).toContain('WScript.Shell')
     expect(vbs).toContain('powershell.exe')
-    expect(vbs).toContain('-ExecutionPolicy Bypass')
+    // Uses RemoteSigned (less suspicious than Bypass) and omits
+    // -WindowStyle Hidden because shell.Run's second argument (0) already
+    // hides the window — no suspicious flags visible in the VBS content.
+    expect(vbs).toContain('-ExecutionPolicy RemoteSigned')
+    expect(vbs).not.toContain('-ExecutionPolicy Bypass')
+    expect(vbs).not.toContain('-WindowStyle Hidden')
     expect(vbs).toContain('launcher.ps1')
     // Precise assertion: the path must be wrapped in VBS-escaped quotes
     // (""produces a literal " in the VBS string value) so shell.Run receives
