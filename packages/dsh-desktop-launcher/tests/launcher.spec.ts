@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   desktopFileName,
+  launcherJsFileName,
   renderDesktopEntry,
   renderLauncherScript,
+  renderNodeLauncher,
   renderShortcutInstaller,
+  renderWindowsShortcutArgs,
   resolveLauncherSpec,
   scriptFileName,
 } from '../src/core/launcher.ts'
@@ -21,9 +24,40 @@ describe('file names', () => {
   it('names launcher scripts and desktop icons per platform', () => {
     expect(scriptFileName('darwin')).toBe('launcher.command')
     expect(scriptFileName('linux')).toBe('launcher.sh')
+    expect(launcherJsFileName()).toBe('launcher-win.js')
     expect(desktopFileName('win32')).toBe('DeepSeek-Harness.lnk')
     expect(desktopFileName('darwin')).toBe('DeepSeek-Harness.command')
     expect(desktopFileName('linux')).toBe('deepseek-harness.desktop')
+  })
+})
+
+describe('win32 Node detach launcher', () => {
+  it('spawns the dsh command detached with no console window', () => {
+    const js = renderNodeLauncher()
+    expect(js).toContain("require('node:child_process')")
+    expect(js).toContain('process.argv.slice(2)')
+    expect(js).toContain("detached: true")
+    expect(js).toContain("stdio: 'ignore'")
+    expect(js).toContain('windowsHide: true')
+    expect(js).toContain('child.unref()')
+    // No shell / PowerShell / suspicious flags anywhere in the launcher.
+    expect(js).not.toContain('powershell')
+    expect(js).not.toContain('-ExecutionPolicy Bypass')
+    expect(js).not.toContain('Add-Type')
+    expect(js).not.toContain('cmd.exe')
+  })
+
+  it('builds argv tokens, quoting only whitespace-containing values', () => {
+    expect(renderWindowsShortcutArgs({ launcherPath: 'C:/u/.dsh/desktop-launcher/launcher-win.js', dshCommand: 'C:/u/bin/dsh.cmd' }))
+      .toBe('C:/u/.dsh/desktop-launcher/launcher-win.js C:/u/bin/dsh.cmd web')
+    expect(renderWindowsShortcutArgs({
+      launcherPath: 'C:/Program Files/DSH/launcher-win.js',
+      dshCommand: 'C:/Users/My Name/bin/dsh.cmd',
+      profile: 'my profile',
+    })).toBe('"C:/Program Files/DSH/launcher-win.js" "C:/Users/My Name/bin/dsh.cmd" web --profile "my profile"')
+    // An empty profile is dropped entirely.
+    expect(renderWindowsShortcutArgs({ launcherPath: 'L', dshCommand: 'D', profile: '' }))
+      .toBe('L D web')
   })
 })
 
@@ -57,19 +91,19 @@ describe('desktop file rendering', () => {
 })
 
 describe('Windows shortcut installer', () => {
-  it('points the .lnk directly at the resolved dsh command', () => {
+  it('targets node.exe and passes the launcher + dsh tokens as arguments', () => {
     const cmd = renderShortcutInstaller({
-      commandPath: 'C:/Users/u/AppData/Roaming/npm/dsh.cmd',
-      commandArgs: 'web',
+      commandPath: 'C:/Program Files/nodejs/node.exe',
+      commandArgs: '"C:/Users/u/.dsh/desktop-launcher/launcher-win.js" "C:/Users/u/AppData/Roaming/npm/dsh.cmd" web',
       desktopPath: 'C:/Users/u/Desktop/DSH.lnk',
       homeDir: 'C:/Users/u',
       iconLocation: 'C:/Users/u/.dsh/desktop-launcher/dsh.ico',
     })
-    expect(cmd).toContain("$s.TargetPath = 'C:/Users/u/AppData/Roaming/npm/dsh.cmd'")
-    expect(cmd).toContain("$s.Arguments = 'web'")
+    expect(cmd).toContain("$s.TargetPath = 'C:/Program Files/nodejs/node.exe'")
+    expect(cmd).toContain("$s.Arguments = '\"C:/Users/u/.dsh/desktop-launcher/launcher-win.js\" \"C:/Users/u/AppData/Roaming/npm/dsh.cmd\" web'")
     expect(cmd).toContain("$s.WorkingDirectory = 'C:/Users/u'")
     expect(cmd).toContain("$s.IconLocation = 'C:/Users/u/.dsh/desktop-launcher/dsh.ico'")
-    // SW_SHOWMINIMIZED: the dsh console stays out of the way.
+    // SW_SHOWMINIMIZED: the brief node launcher console stays out of the way.
     expect(cmd).toContain('$s.WindowStyle = 7')
     expect(cmd).toContain('$s.Save()')
     // The launch chain contains no PowerShell: no ExecutionPolicy Bypass, no
@@ -85,13 +119,13 @@ describe('Windows shortcut installer', () => {
 
   it('passes the profile as a --profile argument', () => {
     const cmd = renderShortcutInstaller({
-      commandPath: 'C:/dsh.cmd',
-      commandArgs: 'web --profile dev',
+      commandPath: 'C:/Program Files/nodejs/node.exe',
+      commandArgs: '"C:/launcher-win.js" "C:/dsh.cmd" web --profile dev',
       desktopPath: 'C:/Desktop/DSH.lnk',
       homeDir: 'C:/',
       iconLocation: 'cmd.exe,0',
     })
-    expect(cmd).toContain("$s.Arguments = 'web --profile dev'")
+    expect(cmd).toContain("$s.Arguments = '\"C:/launcher-win.js\" \"C:/dsh.cmd\" web --profile dev'")
   })
 
   it('escapes single quotes in embedded values', () => {

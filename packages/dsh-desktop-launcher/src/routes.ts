@@ -16,7 +16,7 @@ import { dshHome } from './dsh-home.ts'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { desktopFileName, renderDesktopEntry, renderLauncherScript, renderShortcutInstaller, scriptFileName, type LauncherPlatform, type LauncherSpec } from './core/launcher.ts'
+import { desktopFileName, launcherJsFileName, renderDesktopEntry, renderLauncherScript, renderNodeLauncher, renderShortcutInstaller, renderWindowsShortcutArgs, scriptFileName, type LauncherPlatform, type LauncherSpec } from './core/launcher.ts'
 import { LAUNCHER_API, type CreateResult } from './protocol.ts'
 import { isLoopbackRequest } from './loopback.ts'
 
@@ -182,17 +182,27 @@ export async function createDesktopShortcut(deps: LauncherRoutesDeps): Promise<C
   let warning: string | undefined
   if (dshCommandPath === undefined) warning = `dsh command "${spec.dshCommand}" was not found on PATH; the launcher shows a message when run`
   if (platform === 'win32') {
-    // The .lnk points DIRECTLY at the resolved dsh command — no launcher.ps1,
-    // no .bat wrapper, no powershell.exe anywhere in the launch chain. This
-    // removes the Windows Defender HEUR:Trojan/LNK.Agent.b trigger (.lnk
-    // targeting powershell.exe with -ExecutionPolicy Bypass -WindowStyle Hidden).
-    const commandArgs = spec.profile === undefined || spec.profile === '' ? 'web' : `web --profile ${spec.profile}`
+    // The .lnk targets the node binary running this host, which runs a static
+    // Node detach launcher (launcher-win.js) that spawns the resolved dsh
+    // command headless (CREATE_NO_WINDOW, detached) and exits. The app opens
+    // with no lingering console, and the launch chain contains no PowerShell,
+    // no launcher.ps1, no .bat wrapper, no -ExecutionPolicy Bypass, no
+    // Add-Type — the Windows Defender HEUR:Trojan/LNK.Agent.b trigger is gone.
+    const launcherPath = join(scriptsDir, launcherJsFileName())
+    await writeFile(launcherPath, renderNodeLauncher())
+    // Plain argv tokens (whitespace-only quoting); no user-controlled text is
+    // interpolated into any script or shell.
+    const commandArgs = renderWindowsShortcutArgs({
+      launcherPath,
+      dshCommand: dshCommandPath ?? spec.dshCommand,
+      profile: spec.profile,
+    })
     const installCommand = renderShortcutInstaller({
-      commandPath: dshCommandPath ?? spec.dshCommand,
+      commandPath: process.execPath,
       commandArgs,
       desktopPath: iconPath,
       homeDir: home,
-      iconLocation: iconIco ?? 'cmd.exe,0',
+      iconLocation: iconIco ?? `${process.execPath},0`,
     })
     // Creation-time only: a plain COM shortcut create via powershell -Command.
     // No -ExecutionPolicy Bypass, no -File, no script left on disk.

@@ -10,13 +10,21 @@
 
 - 设置 → 插件配置 → Web UI 插件 卡片内有「创建桌面图标」按钮；host 把启动脚本
   写到 `~/.dsh/desktop-launcher/`，并把图标放到桌面。
-- 双击行为：先探测 GUI 地址；已在响应则直接打开浏览器；否则后台启动
-  `dsh web`（Windows 隐藏窗口），最多轮询 30 秒后打开浏览器。找不到 `dsh`
-  命令时弹提示，而不是静默失败。
+- 双击行为：
+  - POSIX（macOS / Linux）：先探测 GUI 地址；已在响应则直接打开浏览器；否则
+    后台启动 `dsh web`，最多轮询 30 秒后打开浏览器。找不到 `dsh` 命令时弹提示。
+  - Windows：`.lnk` 指向运行 dsh 的 node 可执行文件，经一个静态 Node 启动器
+    （`launcher-win.js`）以分离、无控制台方式拉起 `dsh web`——启动链路不含
+    PowerShell，也不会留下黑窗；浏览器由 `dsh web` 默认自动打开。
 - 每次点按钮都会按当前设置重新生成启动脚本，因此 `dshCommand` / `url` /
   `profile` 修改后重新创建即生效，无需手动改图标目标。
-- Windows 启动器与快捷方式安装脚本使用带 BOM 的 UTF-8 写出，兼容 Windows PowerShell 5.1 和非 ASCII 用户路径。命令解析优先选择 npm 的 `dsh.cmd`/可执行 shim，而不是 `dsh.ps1`；仅剩 PowerShell 脚本时会显式经 `powershell.exe` 调用，不触发系统文件关联。
-- Windows 快捷方式使用 DeepSeek Harness 鲸鱼图标（白底），启动时弹出深色风格的「启动中」小窗代替黑窗：实时显示进度（启动 dsh、等待 GUI 就绪），失败时（找不到命令 / 超时）红字提示并提供「确定」按钮。
+- Windows 启动链路完全免 shell：`.lnk` 指向 node 可执行文件，静态 Node 启动器
+  （`launcher-win.js`）以 CREATE_NO_WINDOW、分离方式拉起 `dsh web`，快捷方式不
+  留控制台窗口。`.lnk` 本身由宿主一次性经 `powershell -NoProfile -Command`
+  创建（纯 COM 建快捷方式——无 `-ExecutionPolicy Bypass`、无 `-File`、不落盘
+  脚本、无运行时 `Add-Type`）。
+- Windows 快捷方式使用 DeepSeek Harness 鲸鱼图标（白底），双击直接打开应用，
+  无黑色控制台窗口。
 
 ## 安装
 
@@ -62,7 +70,8 @@ dsh plugin --profile web add link:$(pwd)/packages/dsh-desktop-launcher
 
 - 启动器假设双击时 `dsh` 在 PATH 中；dsh 不在 PATH 时把 `dshCommand` 配成
   绝对路径。
-- 30 秒就绪轮询是固定值；首次启动特别慢可能超时（启动器会弹提示）。
+- 30 秒就绪轮询适用于 POSIX 启动器且为固定值；首次启动特别慢可能超时（启动
+  器会弹提示）。Windows 无轮询：`dsh web` 自行打开浏览器。
 - 创建图标需要桌面目录；Windows 的 OneDrive 重定向桌面会被识别，其他重定向
   可能需要手动放置图标。
 

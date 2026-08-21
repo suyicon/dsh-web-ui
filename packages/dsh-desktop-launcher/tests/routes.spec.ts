@@ -40,7 +40,7 @@ function recordingRunner(calls: Call[], opts?: RunnerOpts): CommandRunner {
 const spec = () => ({ dshCommand: 'dsh', url: 'http://127.0.0.1:3080' })
 
 describe('createDesktopShortcut', () => {
-  it('creates a win32 .lnk pointing directly at the resolved dsh command', async () => {
+  it('creates a win32 .lnk targeting node.exe with the Node detach launcher', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-desktop-launcher-win-'))
     try {
       const calls: Call[] = []
@@ -60,19 +60,24 @@ describe('createDesktopShortcut', () => {
       expect(result.path).toBe(join(dir, 'Desktop', 'DeepSeek-Harness.lnk'))
       expect(result.warning).toBeUndefined()
       const scriptDir = join(dir, 'desktop-launcher')
-      // No launcher scripts are written on win32: the .lnk targets dsh directly.
+      // No PowerShell scripts are written on win32: only the Node detach
+      // launcher + the copied icon.
       expect(existsSync(join(scriptDir, 'launcher.ps1'))).toBe(false)
       expect(existsSync(join(scriptDir, 'launcher.bat'))).toBe(false)
       expect(existsSync(join(scriptDir, 'install-shortcut.ps1'))).toBe(false)
-      // The dsh icon is still copied for the .lnk icon.
+      expect(existsSync(join(scriptDir, 'launcher-win.js'))).toBe(true)
       expect(existsSync(join(scriptDir, 'dsh.ico'))).toBe(true)
       expect(calls[0]?.file).toBe('where')
       const installer = calls.find(call => call.file === 'powershell')
       // Created via -Command, not -File / -ExecutionPolicy Bypass.
       expect(installer?.args.slice(0, 2)).toEqual(['-NoProfile', '-Command'])
       const cmd = installer?.args[2] ?? ''
-      expect(cmd).toContain("$s.TargetPath = '" + fakeDsh + "'")
-      expect(cmd).toContain("$s.Arguments = 'web'")
+      // .lnk target is the node binary running the host; arguments are the
+      // launcher path + dsh path + web (temp paths have no whitespace, so
+      // the whitespace-quoting leaves them bare).
+      expect(cmd).toContain("$s.TargetPath = '" + process.execPath + "'")
+      const launcherArg = join(scriptDir, 'launcher-win.js')
+      expect(cmd).toContain(`$s.Arguments = '${launcherArg} ${fakeDsh} web'`)
       expect(cmd).toContain("$s.IconLocation = '" + join(scriptDir, 'dsh.ico') + "'")
       expect(cmd).toContain('$s.WindowStyle = 7')
       // The launch chain has no PowerShell flags, Add-Type, or wrappers.
@@ -100,7 +105,10 @@ describe('createDesktopShortcut', () => {
       expect(result.ok).toBe(true)
       expect(result.warning).toContain('not found on PATH')
       const installer = calls.find(call => call.file === 'powershell')
-      expect(installer?.args[2]).toContain("$s.TargetPath = 'dsh'")
+      // Node launcher still created; the unresolved 'dsh' token is passed
+      // through argv and the launcher exits cleanly.
+      expect(installer?.args[2]).toContain("$s.TargetPath = '" + process.execPath + "'")
+      expect(installer?.args[2]).toContain('dsh web')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

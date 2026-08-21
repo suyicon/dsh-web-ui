@@ -15,9 +15,12 @@ dsh web 并打开 Web GUI；界面右下角浮动关机按钮，确认后请求�
   browser 半区（src/client/）在「Web UI 插件」组注册设置卡片（创建按钮 +
   enabled / announceToAgent / dshCommand / url / profile / iconPath /
   confirmShutdown 字段），并挂载右下角浮动关机按钮。
-- Windows 启动器是 WPF「启动中」弹窗（launcher.ps1 内嵌 XAML），图标为内置白底
-  黑鲸资产（assets/dsh.ico + dsh.png）；改弹窗/图标先改 src/core/launcher.ts 与
-  assets/，再重建。launcher.ps1 必须带 UTF-8 BOM 写出（中文文案，PS 5.1 无 BOM 乱码）。
+- Windows 启动链路是纯 Node：`.lnk` 指向运行 dsh 的 node 可执行文件，静态
+  `launcher-win.js`（renderNodeLauncher）以 detached + windowsHide 分离、无控制台
+  方式拉起 `dsh web`，`.lnk` 参数由 renderWindowsShortcutArgs 生成（仅含空格的
+  token 加引号）；`.lnk` 本身由宿主经 `powershell -NoProfile -Command` 的纯 COM
+  一次性创建（无 -ExecutionPolicy Bypass / -File / 落盘脚本 / Add-Type）。图标为
+  内置白底黑鲸资产（assets/dsh.ico + dsh.png），改图标先改 assets/ 再重建。
 - 纯逻辑在 src/core/launcher.ts（脚本渲染、文件名、路径转义），禁止在
   routes.ts 里内联生成逻辑；测试注入 homeDir / platform / run，不碰真实进程。
 - shutdown-routes.ts 是独立于 routes.ts 的第二个路由文件（各持不同测试 seam），
