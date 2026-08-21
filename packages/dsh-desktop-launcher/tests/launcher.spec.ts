@@ -114,5 +114,10 @@ describe('desktop file rendering', () => {
     expect(vbs).toContain('powershell.exe')
     expect(vbs).toContain('-ExecutionPolicy Bypass')
     expect(vbs).toContain('launcher.ps1')
+    // Precise assertion: the path must be wrapped in VBS-escaped quotes
+    // (""produces a literal " in the VBS string value) so shell.Run receives
+    // a properly quoted -File argument. Without this, paths with spaces or
+    // the bare token after -File " would cause a VBS compile error.
+    expect(vbs).toContain('-File ""C:/Users/u/.dsh/desktop-launcher/launcher.ps1""')
   })
 })

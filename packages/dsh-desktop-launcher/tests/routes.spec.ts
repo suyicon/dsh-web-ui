@@ -67,6 +67,10 @@ describe('createDesktopShortcut', () => {
       expect(vbsContent).toContain('WScript.Shell')
       expect(vbsContent).toContain('powershell.exe')
       expect(vbsContent).toContain(join(scriptDir, 'launcher.ps1'))
+      // Precise assertion: the VBS string must use doubled quotes ("""")
+      // around the path so that shell.Run receives a properly quoted -File
+      // argument. Single quotes would cause a VBScript compile error.
+      expect(vbsContent).toContain('-File ""' + join(scriptDir, 'launcher.ps1') + '""')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
