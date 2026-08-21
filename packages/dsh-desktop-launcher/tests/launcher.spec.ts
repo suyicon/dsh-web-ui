@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  batFileName,
   desktopFileName,
+  renderBatWrapper,
   renderDesktopEntry,
   renderLauncherScript,
   renderShortcutInstaller,
-  renderVbsWrapper,
   resolveLauncherSpec,
   scriptFileName,
-  vbsFileName,
 } from '../src/core/launcher.ts'
 
 describe('launcher spec resolution', () => {
@@ -78,51 +78,41 @@ describe('desktop file rendering', () => {
     expect(withIcon).not.toContain('Icon=utilities-terminal')
   })
 
-  it('renders a Windows shortcut installer targeting wscript.exe + launcher.vbs', () => {
+  it('renders a Windows shortcut installer targeting cmd.exe + launcher.bat', () => {
     const ps = renderShortcutInstaller({
-      vbsPath: 'C:/Users/u/.dsh/desktop-launcher/launcher.vbs',
+      batPath: 'C:/Users/u/.dsh/desktop-launcher/launcher.bat',
       desktopPath: 'C:/Users/u/Desktop/DSH.lnk',
       homeDir: 'C:/Users/u',
       iconLocation: 'C:/Users/u/.dsh/desktop-launcher/dsh.ico',
     })
-    // .lnk targets wscript.exe + launcher.vbs, not powershell.exe with suspicious flags
-    expect(ps).toContain("$shortcut.TargetPath = 'wscript.exe'")
-    expect(ps).toContain("$shortcut.Arguments = 'C:/Users/u/.dsh/desktop-launcher/launcher.vbs'")
+    // .lnk targets cmd.exe + launcher.bat, not powershell.exe with suspicious flags
+    expect(ps).toContain("$shortcut.TargetPath = 'cmd.exe'")
+    expect(ps).toContain('launcher.bat')
     expect(ps).not.toContain('-ExecutionPolicy Bypass')
     expect(ps).not.toContain('-WindowStyle Hidden')
     expect(ps).toContain("$shortcut.IconLocation = 'C:/Users/u/.dsh/desktop-launcher/dsh.ico'")
     expect(ps).toContain("$shortcut.Save()")
   })
 
-  it('falls back to wscript.exe icon when no icon is given', () => {
+  it('falls back to cmd.exe icon when no icon is given', () => {
     const ps = renderShortcutInstaller({
-      vbsPath: 'C:/launcher.vbs',
+      batPath: 'C:/launcher.bat',
       desktopPath: 'C:/Desktop/DSH.lnk',
       homeDir: 'C:/',
-      iconLocation: 'wscript.exe,0',
+      iconLocation: 'cmd.exe,0',
     })
-    expect(ps).toContain("$shortcut.IconLocation = 'wscript.exe,0'")
+    expect(ps).toContain("$shortcut.IconLocation = 'cmd.exe,0'")
   })
 
-  it('returns the VBS wrapper file name', () => {
-    expect(vbsFileName()).toBe('launcher.vbs')
+  it('returns the BAT wrapper file name', () => {
+    expect(batFileName()).toBe('launcher.bat')
   })
 
-  it('renders a VBS wrapper that invokes powershell.exe with the ps1 path', () => {
-    const vbs = renderVbsWrapper('C:/Users/u/.dsh/desktop-launcher/launcher.ps1')
-    expect(vbs).toContain('WScript.Shell')
-    expect(vbs).toContain('powershell.exe')
-    // Uses RemoteSigned (less suspicious than Bypass) and omits
-    // -WindowStyle Hidden because shell.Run's second argument (0) already
-    // hides the window — no suspicious flags visible in the VBS content.
-    expect(vbs).toContain('-ExecutionPolicy RemoteSigned')
-    expect(vbs).not.toContain('-ExecutionPolicy Bypass')
-    expect(vbs).not.toContain('-WindowStyle Hidden')
-    expect(vbs).toContain('launcher.ps1')
-    // Precise assertion: the path must be wrapped in VBS-escaped quotes
-    // (""produces a literal " in the VBS string value) so shell.Run receives
-    // a properly quoted -File argument. Without this, paths with spaces or
-    // the bare token after -File " would cause a VBS compile error.
-    expect(vbs).toContain('-File ""C:/Users/u/.dsh/desktop-launcher/launcher.ps1""')
+  it('renders a BAT wrapper that calls powershell.exe with the ps1 path', () => {
+    const bat = renderBatWrapper('C:/Users/u/.dsh/desktop-launcher/launcher.ps1')
+    expect(bat).toContain('powershell')
+    expect(bat).toContain('-ExecutionPolicy Bypass')
+    expect(bat).toContain('-WindowStyle Hidden')
+    expect(bat).toContain('launcher.ps1')
   })
 })
