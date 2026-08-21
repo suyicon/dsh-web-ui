@@ -6,7 +6,7 @@
 
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -19,14 +19,20 @@ interface Call {
   args: string[]
 }
 
+interface RunnerOpts {
+  failWith?: { file: string; code: number; stderr: string }
+  stdoutFor?: Record<string, string>
+}
+
 /**
  * Recording runner: captures invocations and returns success unless the
- * failWith file matches.
+ * failWith file matches; stdoutFor lets tests fake e.g. `where` output.
  */
-function recordingRunner(calls: Call[], failWith?: { file: string; code: number; stderr: string }): CommandRunner {
+function recordingRunner(calls: Call[], opts?: RunnerOpts): CommandRunner {
   return async (file, args) => {
     calls.push({ file, args })
-    if (failWith !== undefined && file === failWith.file) return { code: failWith.code, stderr: failWith.stderr }
+    if (opts?.failWith !== undefined && file === opts.failWith.file) return { code: opts.failWith.code, stderr: opts.failWith.stderr }
+    if (opts?.stdoutFor !== undefined && file in opts.stdoutFor) return { code: 0, stdout: opts.stdoutFor[file], stderr: '' }
     return { code: 0, stderr: '' }
   }
 }
@@ -34,50 +40,69 @@ function recordingRunner(calls: Call[], failWith?: { file: string; code: number;
 const spec = () => ({ dshCommand: 'dsh', url: 'http://127.0.0.1:3080' })
 
 describe('createDesktopShortcut', () => {
-  it('writes the PowerShell launcher and runs the .lnk installer on win32', async () => {
+  it('creates a win32 .lnk pointing directly at the resolved dsh command', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-desktop-launcher-win-'))
     try {
       const calls: Call[] = []
       const iconFile = join(dir, 'dsh.ico')
       writeFileSync(iconFile, 'fake-ico', 'utf8')
-      const result = await createDesktopShortcut({ resolveSpec: spec, homeDir: dir, dshHomeDir: dir, platform: 'win32', run: recordingRunner(calls), iconSource: iconFile })
+      const fakeDsh = join(dir, 'dsh.cmd')
+      writeFileSync(fakeDsh, '@echo off\r\n', 'utf8')
+      const result = await createDesktopShortcut({
+        resolveSpec: spec,
+        homeDir: dir,
+        dshHomeDir: dir,
+        platform: 'win32',
+        run: recordingRunner(calls, { stdoutFor: { where: fakeDsh } }),
+        iconSource: iconFile,
+      })
       expect(result.ok).toBe(true)
       expect(result.path).toBe(join(dir, 'Desktop', 'DeepSeek-Harness.lnk'))
-      expect(existsSync(join(dir, 'desktop-launcher', 'launcher.ps1'))).toBe(true)
-      expect(existsSync(join(dir, 'desktop-launcher', 'install-shortcut.ps1'))).toBe(true)
-      // the bundled dsh icon is copied next to the launcher and wired into the .lnk
-      expect(existsSync(join(dir, 'desktop-launcher', 'dsh.ico'))).toBe(true)
+      expect(result.warning).toBeUndefined()
+      const scriptDir = join(dir, 'desktop-launcher')
+      // No launcher scripts are written on win32: the .lnk targets dsh directly.
+      expect(existsSync(join(scriptDir, 'launcher.ps1'))).toBe(false)
+      expect(existsSync(join(scriptDir, 'launcher.bat'))).toBe(false)
+      expect(existsSync(join(scriptDir, 'install-shortcut.ps1'))).toBe(false)
+      // The dsh icon is still copied for the .lnk icon.
+      expect(existsSync(join(scriptDir, 'dsh.ico'))).toBe(true)
       expect(calls[0]?.file).toBe('where')
       const installer = calls.find(call => call.file === 'powershell')
-      expect(installer?.args).toContain('-File')
-      const installerScript = existsSync(join(dir, 'desktop-launcher', 'install-shortcut.ps1'))
-        ? readFileSync(join(dir, 'desktop-launcher', 'install-shortcut.ps1'), 'utf8') : ''
-      expect(installerScript).toContain("$shortcut.IconLocation = '" + join(dir, 'desktop-launcher', 'dsh.ico') + "'")
-      const launcherBytes = readFileSync(join(dir, 'desktop-launcher', 'launcher.ps1'))
-      const installerBytes = readFileSync(join(dir, 'desktop-launcher', 'install-shortcut.ps1'))
-      expect([...launcherBytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
-      expect([...installerBytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+      // Created via -Command, not -File / -ExecutionPolicy Bypass.
+      expect(installer?.args.slice(0, 2)).toEqual(['-NoProfile', '-Command'])
+      const cmd = installer?.args[2] ?? ''
+      expect(cmd).toContain("$s.TargetPath = '" + fakeDsh + "'")
+      expect(cmd).toContain("$s.Arguments = 'web'")
+      expect(cmd).toContain("$s.IconLocation = '" + join(scriptDir, 'dsh.ico') + "'")
+      expect(cmd).toContain('$s.WindowStyle = 7')
+      // The launch chain has no PowerShell flags, Add-Type, or wrappers.
+      expect(cmd).not.toContain('-ExecutionPolicy Bypass')
+      expect(cmd).not.toContain('-WindowStyle Hidden')
+      expect(cmd).not.toContain('Add-Type')
+      expect(cmd).not.toContain('launcher.ps1')
+      expect(cmd).not.toContain('launcher.bat')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  it('writes launcher assets under DSH_HOME while the icon stays on the OS desktop', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-desktop-launcher-home-'))
-    const dshHome = mkdtempSync(join(tmpdir(), 'dsh-desktop-launcher-dshhome-'))
+  it('warns when dsh is missing on win32 but still creates the shortcut', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-desktop-launcher-win-missing-'))
     try {
       const calls: Call[] = []
-      const result = await createDesktopShortcut({ resolveSpec: spec, homeDir: home, dshHomeDir: dshHome, platform: 'win32', run: recordingRunner(calls) })
+      const result = await createDesktopShortcut({
+        resolveSpec: spec,
+        homeDir: dir,
+        dshHomeDir: dir,
+        platform: 'win32',
+        run: recordingRunner(calls, { failWith: { file: 'where', code: 1, stderr: 'INFO: Could not find files' } }),
+      })
       expect(result.ok).toBe(true)
-      // The double-click icon still lands on the OS desktop...
-      expect(result.path).toBe(join(home, 'Desktop', 'DeepSeek-Harness.lnk'))
-      // ...while launcher scripts and copied icons live under DSH_HOME.
-      expect(existsSync(join(dshHome, 'desktop-launcher', 'launcher.ps1'))).toBe(true)
-      expect(existsSync(join(dshHome, 'desktop-launcher', 'install-shortcut.ps1'))).toBe(true)
-      expect(existsSync(join(home, '.dsh', 'desktop-launcher', 'launcher.ps1'))).toBe(false)
+      expect(result.warning).toContain('not found on PATH')
+      const installer = calls.find(call => call.file === 'powershell')
+      expect(installer?.args[2]).toContain("$s.TargetPath = 'dsh'")
     } finally {
-      rmSync(home, { recursive: true, force: true })
-      rmSync(dshHome, { recursive: true, force: true })
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 

@@ -26,6 +26,8 @@ const execFileAsync = promisify(execFile)
 export interface CommandResult {
   /** Process exit code. */
   code: number | null
+  /** Captured stdout (when the runner captures it, e.g. `where` output). */
+  stdout?: string
   /** Captured stderr. */
   stderr: string
 }
@@ -82,11 +84,11 @@ function resolveIconSource(configured: string | undefined, override: string | un
   return bundledIconPath !== undefined && existsSync(bundledIconPath) ? bundledIconPath : undefined
 }
 
-/** Default runner: execFile with a 30s cap, reporting exit code and stderr. */
+/** Default runner: execFile with a 30s cap, reporting exit code, stdout and stderr. */
 const defaultRunner: CommandRunner = async (file, args) => {
   try {
-    await execFileAsync(file, args, { timeout: 30_000, windowsHide: true })
-    return { code: 0, stderr: '' }
+    const { stdout } = await execFileAsync(file, args, { timeout: 30_000, windowsHide: true })
+    return { code: 0, stdout: String(stdout), stderr: '' }
   } catch (error) {
     const code = typeof error === 'object' && error !== null && 'code' in error
       ? (error as { code?: unknown }).code
@@ -118,21 +120,28 @@ function resolveDesktopDir(home: string, platform: LauncherPlatform): string {
 }
 
 /**
- * Best-effort dsh command probe (never throws). Absolute or path-like
- * commands are checked by existence; bare names are probed through the
- * platform's PATH lookup.
+ * Resolve the dsh command to an absolute path (never throws). Absolute or
+ * path-like commands are checked by existence; bare names are resolved through
+ * the platform's PATH lookup, returning the first match.
+ * @returns the resolved command path, or undefined when not found.
  */
-async function probeDsh(platform: LauncherPlatform, run: CommandRunner, dshCommand: string): Promise<boolean> {
+async function resolveDshCommand(platform: LauncherPlatform, run: CommandRunner, dshCommand: string): Promise<string | undefined> {
   if (isAbsolute(dshCommand) || dshCommand.includes('/') || dshCommand.includes('\\')) {
-    return existsSync(dshCommand)
+    return existsSync(dshCommand) ? dshCommand : undefined
   }
   try {
-    const result = platform === 'win32'
-      ? await run('where', [dshCommand])
-      : await run('sh', ['-lc', `command -v ${dshCommand}`])
-    return result.code === 0
+    if (platform === 'win32') {
+      const result = await run('where', [dshCommand])
+      if (result.code !== 0) return undefined
+      const match = (result.stdout ?? '').split(/\r?\n/).map((line) => line.trim()).find((line) => line.length > 0)
+      return match ?? undefined
+    }
+    const result = await run('sh', ['-lc', `command -v ${dshCommand}`])
+    if (result.code !== 0) return undefined
+    const match = (result.stdout ?? '').trim()
+    return match === '' ? undefined : match
   } catch {
-    return false
+    return undefined
   }
 }
 
@@ -149,12 +158,9 @@ export async function createDesktopShortcut(deps: LauncherRoutesDeps): Promise<C
   const run = deps.run ?? defaultRunner
   const scriptsDir = join(deps.dshHomeDir ?? dshHome(), 'desktop-launcher')
   await mkdir(scriptsDir, { recursive: true })
-  const launcherPath = join(scriptsDir, scriptFileName(platform))
-  // UTF-8 BOM: Windows PowerShell 5.1 misreads the Chinese popup text without it.
-  await writeFile(launcherPath, '\uFEFF' + renderLauncherScript(platform, spec), { mode: 0o755 })
   // Copy the icons next to the launcher so the shortcut keeps working even if
-  // the source package moves: windows uses dsh.ico as the .lnk icon, the
-  // startup popup and linux use dsh.png when available.
+  // the source package moves: windows uses dsh.ico as the .lnk icon, POSIX
+  // launchers use dsh.png when available.
   let iconIco: string | undefined
   let iconPng: string | undefined
   const iconSource = resolveIconSource(spec.iconPath, deps.iconSource)
@@ -172,24 +178,39 @@ export async function createDesktopShortcut(deps: LauncherRoutesDeps): Promise<C
   const desktopDir = resolveDesktopDir(home, platform)
   await mkdir(desktopDir, { recursive: true })
   const iconPath = join(desktopDir, desktopFileName(platform))
+  const dshCommandPath = await resolveDshCommand(platform, run, spec.dshCommand)
   let warning: string | undefined
-  const dshFound = await probeDsh(platform, run, spec.dshCommand)
-  if (!dshFound) warning = `dsh command "${spec.dshCommand}" was not found on PATH; the launcher shows a message when run`
+  if (dshCommandPath === undefined) warning = `dsh command "${spec.dshCommand}" was not found on PATH; the launcher shows a message when run`
   if (platform === 'win32') {
-    const installerPath = join(scriptsDir, 'install-shortcut.ps1')
-    // The installer embeds user paths and may contain non-ASCII characters;
-    // Windows PowerShell 5.1 requires a BOM to decode it as UTF-8.
-    await writeFile(installerPath, '\uFEFF' + renderShortcutInstaller({ launcherPath, desktopPath: iconPath, homeDir: home, iconLocation: iconIco ?? 'powershell.exe,0' }))
-    const result = await run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installerPath])
+    // The .lnk points DIRECTLY at the resolved dsh command — no launcher.ps1,
+    // no .bat wrapper, no powershell.exe anywhere in the launch chain. This
+    // removes the Windows Defender HEUR:Trojan/LNK.Agent.b trigger (.lnk
+    // targeting powershell.exe with -ExecutionPolicy Bypass -WindowStyle Hidden).
+    const commandArgs = spec.profile === undefined || spec.profile === '' ? 'web' : `web --profile ${spec.profile}`
+    const installCommand = renderShortcutInstaller({
+      commandPath: dshCommandPath ?? spec.dshCommand,
+      commandArgs,
+      desktopPath: iconPath,
+      homeDir: home,
+      iconLocation: iconIco ?? 'cmd.exe,0',
+    })
+    // Creation-time only: a plain COM shortcut create via powershell -Command.
+    // No -ExecutionPolicy Bypass, no -File, no script left on disk.
+    const result = await run('powershell', ['-NoProfile', '-Command', installCommand])
     if (result.code !== 0) throw new Error(`shortcut creation failed: ${result.stderr}`)
-  } else if (platform === 'darwin') {
-    await writeFile(iconPath, renderLauncherScript(platform, spec), { mode: 0o755 })
   } else {
-    await writeFile(iconPath, renderDesktopEntry(launcherPath, iconPng ?? iconIco), { mode: 0o755 })
-    await chmod(launcherPath, 0o755)
-    // Best-effort trust marker: GNOME refuses untrusted desktop entries.
-    const trust = await run('gio', ['set', iconPath, 'metadata::trusted', 'true'])
-    if (trust.code !== 0) warning = `desktop entry created but not marked trusted: ${trust.stderr}`
+    const launcherPath = join(scriptsDir, scriptFileName(platform))
+    await writeFile(launcherPath, renderLauncherScript(platform, spec), { mode: 0o755 })
+    if (platform === 'darwin') {
+      // On macOS the desktop file IS the launcher script.
+      await writeFile(iconPath, renderLauncherScript(platform, spec), { mode: 0o755 })
+    } else {
+      await writeFile(iconPath, renderDesktopEntry(launcherPath, iconPng ?? iconIco), { mode: 0o755 })
+      await chmod(launcherPath, 0o755)
+      // Best-effort trust marker: GNOME refuses untrusted desktop entries.
+      const trust = await run('gio', ['set', iconPath, 'metadata::trusted', 'true'])
+      if (trust.code !== 0) warning = `desktop entry created but not marked trusted: ${trust.stderr}`
+    }
   }
   return { ok: true, path: iconPath, platform, ...(warning === undefined ? {} : { warning }) }
 }
